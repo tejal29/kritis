@@ -44,6 +44,10 @@ type testConfig struct {
 	message    string
 }
 
+func mockNoValidAttestations(image string, metadataClient metadata.MetadataFetcher, ns string) bool {
+	return false
+}
+
 func Test_BreakglassAnnotation(t *testing.T) {
 	mockPod := func(r *http.Request) (*v1.Pod, v1beta1.AdmissionReview, error) {
 		return &v1.Pod{
@@ -53,7 +57,8 @@ func Test_BreakglassAnnotation(t *testing.T) {
 		}, v1beta1.AdmissionReview{}, nil
 	}
 	mockConfig := config{
-		retrievePod: mockPod,
+		retrievePod:          mockPod,
+		validateAttestations: mockNoValidAttestations,
 	}
 	RunTest(t, testConfig{
 		mockConfig: mockConfig,
@@ -84,6 +89,7 @@ func Test_UnqualifiedImage(t *testing.T) {
 		fetchMetadataClient:         testutil.EmptyMockMetadata(),
 		fetchImageSecurityPolicies:  mockISP,
 		validateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
+		validateAttestations:        mockNoValidAttestations,
 	}
 	RunTest(t, testConfig{
 		mockConfig: mockConfig,
@@ -112,6 +118,7 @@ func Test_ValidISP(t *testing.T) {
 		fetchMetadataClient:         testutil.EmptyMockMetadata(),
 		fetchImageSecurityPolicies:  mockISP,
 		validateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
+		validateAttestations:        mockNoValidAttestations,
 	}
 	RunTest(t, testConfig{
 		mockConfig: mockConfig,
@@ -152,6 +159,7 @@ func Test_InvalidISP(t *testing.T) {
 		fetchMetadataClient:         mockMetadata,
 		fetchImageSecurityPolicies:  mockISP,
 		validateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
+		validateAttestations:        mockNoValidAttestations,
 	}
 	RunTest(t, testConfig{
 		mockConfig: mockConfig,

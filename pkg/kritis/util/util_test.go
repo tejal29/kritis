@@ -14,23 +14,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// This package defines all constants needed for AdmissionController.
-package constants
+package util
 
-// Define constants for metav1.Status.Status
-// See https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#response-status-kind
-type Status string
+import (
+	"testing"
 
-const (
-	SuccessStatus Status = "Success"
-	FailureStatus Status = "Failure"
+	"github.com/grafeas/kritis/pkg/kritis/testutil"
 )
 
-const (
-	SuccessMessage    = "Successfully admitted."
-	PodAlreadyRunning = "Pod already running."
-)
+func TestGetUniqueImages(t *testing.T) {
+	var tests = []struct {
+		name   string
+		input  []string
+		output []string
+	}{
+		{
+			name:   "array with duplicates",
+			input:  []string{"a", "b", "a"},
+			output: []string{"a", "b"},
+		},
+	}
 
-const (
-	RSABits = 4096
-)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := GetUniqueImages(test.input)
+			testutil.CheckErrorAndDeepEqual(t, false, nil, len(test.output), len(actual))
+		})
+	}
+}

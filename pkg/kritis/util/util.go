@@ -43,3 +43,17 @@ func CreateAttestationSignature(image string, pgpSigningKey *secrets.PGPSigningS
 	}
 	return attestation.CreateMessageAttestation(pgpSigningKey.PublicKey, pgpSigningKey.PrivateKey, hostStr)
 }
+
+func GetUniqueImages(images []string) []string {
+	imagesMap := map[string]bool{}
+	for _, image := range images {
+		imagesMap[image] = true
+	}
+	uniqueImages := make([]string, len(imagesMap))
+	i := 0
+	for image := range imagesMap {
+		uniqueImages[i] = image
+		i++
+	}
+	return uniqueImages
+}
