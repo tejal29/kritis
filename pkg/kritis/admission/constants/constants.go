@@ -28,7 +28,7 @@ const (
 
 const (
 	SuccessMessage    = "Successfully admitted."
-	PodAlreadyRunning = "Pod already running."
+	ValidAttestations = "Valid Attestation found"
 )
 
 const (

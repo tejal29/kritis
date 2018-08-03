@@ -23,12 +23,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/grafeas/kritis/pkg/kritis/review"
+
 	"github.com/golang/glog"
 	"github.com/grafeas/kritis/cmd/kritis/version"
 	"github.com/grafeas/kritis/pkg/kritis/admission/constants"
 	kritisv1beta1 "github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
 	"github.com/grafeas/kritis/pkg/kritis/crd/securitypolicy"
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
+	"github.com/grafeas/kritis/pkg/kritis/secrets"
 	"github.com/grafeas/kritis/pkg/kritis/testutil"
 	"k8s.io/api/admission/v1beta1"
 	"k8s.io/api/core/v1"
@@ -44,10 +47,15 @@ type testConfig struct {
 	message    string
 }
 
-func mockNoValidAttestations(image string, metadataClient metadata.MetadataFetcher, ns string) bool {
+func returnFalse(image string, metadataClient metadata.MetadataFetcher, ns string, f secrets.Fetcher) bool {
 	return false
 }
 
+func returnTrue(image string, metadataClient metadata.MetadataFetcher, ns string, f secrets.Fetcher) bool {
+	return true
+}
+
+// TODO (tejaldesai): Move ISP tests to review_test.go
 func Test_BreakglassAnnotation(t *testing.T) {
 	mockPod := func(r *http.Request) (*v1.Pod, v1beta1.AdmissionReview, error) {
 		return &v1.Pod{
@@ -57,8 +65,7 @@ func Test_BreakglassAnnotation(t *testing.T) {
 		}, v1beta1.AdmissionReview{}, nil
 	}
 	mockConfig := config{
-		retrievePod:          mockPod,
-		validateAttestations: mockNoValidAttestations,
+		retrievePod: mockPod,
 	}
 	RunTest(t, testConfig{
 		mockConfig: mockConfig,
@@ -85,11 +92,12 @@ func Test_UnqualifiedImage(t *testing.T) {
 	}
 
 	mockConfig := config{
-		retrievePod:                 mockPod,
-		fetchMetadataClient:         testutil.EmptyMockMetadata(),
-		fetchImageSecurityPolicies:  mockISP,
-		validateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
-		validateAttestations:        mockNoValidAttestations,
+		retrievePod:                mockPod,
+		fetchImageSecurityPolicies: mockISP,
+		fetchMetadataClient:        testutil.NilMetadataFetcher(),
+		review: review.Config{
+			ValidateAttestations: returnFalse,
+		},
 	}
 	RunTest(t, testConfig{
 		mockConfig: mockConfig,
@@ -114,11 +122,13 @@ func Test_ValidISP(t *testing.T) {
 		}, nil
 	}
 	mockConfig := config{
-		retrievePod:                 mockValidPod(),
-		fetchMetadataClient:         testutil.EmptyMockMetadata(),
-		fetchImageSecurityPolicies:  mockISP,
-		validateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
-		validateAttestations:        mockNoValidAttestations,
+		retrievePod:                mockValidPod(),
+		fetchImageSecurityPolicies: mockISP,
+		fetchMetadataClient:        testutil.NilMetadataFetcher(),
+		review: review.Config{
+			ValidateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
+			ValidateAttestations:        returnFalse,
+		},
 	}
 	RunTest(t, testConfig{
 		mockConfig: mockConfig,
@@ -146,20 +156,16 @@ func Test_InvalidISP(t *testing.T) {
 					Severity: "MEDIUM",
 				},
 			},
-			PGPAttestations: []metadata.PGPAttestation{
-				{
-					Signature: "sig",
-					KeyId:     "secret",
-				},
-			},
 		}, nil
 	}
 	mockConfig := config{
-		retrievePod:                 mockValidPod(),
-		fetchMetadataClient:         mockMetadata,
-		fetchImageSecurityPolicies:  mockISP,
-		validateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
-		validateAttestations:        mockNoValidAttestations,
+		retrievePod:                mockValidPod(),
+		fetchImageSecurityPolicies: mockISP,
+		fetchMetadataClient:        mockMetadata,
+		review: review.Config{
+			ValidateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
+			ValidateAttestations:        returnFalse,
+		},
 	}
 	RunTest(t, testConfig{
 		mockConfig: mockConfig,
@@ -167,6 +173,45 @@ func Test_InvalidISP(t *testing.T) {
 		allowed:    false,
 		status:     constants.FailureStatus,
 		message:    fmt.Sprintf("found violations in %s", testutil.QualifiedImage),
+	})
+}
+
+func Test_InValidISPWithValidAttestations(t *testing.T) {
+	mockISP := func(namespace string) ([]kritisv1beta1.ImageSecurityPolicy, error) {
+		return []kritisv1beta1.ImageSecurityPolicy{
+			{
+				Spec: kritisv1beta1.ImageSecurityPolicySpec{
+					ImageWhitelist: []string{testutil.QualifiedImage},
+					PackageVulernerabilityRequirements: kritisv1beta1.PackageVulernerabilityRequirements{
+						MaximumSeverity: "LOW",
+					},
+				},
+			},
+		}, nil
+	}
+	mockMetadata := func() (metadata.MetadataFetcher, error) {
+		return testutil.MockMetadataClient{
+			Vulnz: []metadata.Vulnerability{
+				{
+					Severity: "MEDIUM",
+				},
+			},
+		}, nil
+	}
+	mockConfig := config{
+		retrievePod:                mockValidPod(),
+		fetchMetadataClient:        mockMetadata,
+		fetchImageSecurityPolicies: mockISP,
+		review: review.Config{
+			ValidateAttestations: returnTrue,
+		},
+	}
+	RunTest(t, testConfig{
+		mockConfig: mockConfig,
+		httpStatus: http.StatusOK,
+		allowed:    true,
+		status:     constants.SuccessStatus,
+		message:    constants.SuccessMessage,
 	})
 }
 

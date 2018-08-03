@@ -95,16 +95,16 @@ func NewServer(addr string) *http.Server {
 }
 
 func StartCronJob() error {
-	checkInterval, err := time.ParseDuration(cronInterval)
+	d, err := time.ParseDuration(cronInterval)
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
-	cronConfig, err := getCronConfig()
+	config, err := getCronConfig()
 	if err != nil {
 		return err
 	}
-	go cron.Start(ctx, *cronConfig, checkInterval)
+	go cron.Start(ctx, *config, d)
 	return nil
 }
 
@@ -114,9 +114,9 @@ func getCronConfig() (*cron.Config, error) {
 		return nil, err
 	}
 	kcs := ki.(*kubernetes.Clientset)
-	metadataClient, err := containeranalysis.NewContainerAnalysisClient()
+	client, err := containeranalysis.NewContainerAnalysisClient()
 	if err != nil {
 		return nil, err
 	}
-	return cron.NewCronConfig(kcs, *metadataClient), nil
+	return cron.NewCronConfig(kcs, *client), nil
 }

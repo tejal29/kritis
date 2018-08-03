@@ -45,15 +45,15 @@ func CreateAttestationSignature(image string, pgpSigningKey *secrets.PGPSigningS
 }
 
 func GetUniqueImages(images []string) []string {
-	imagesMap := map[string]bool{}
+	m := map[string]bool{}
 	for _, image := range images {
-		imagesMap[image] = true
+		m[image] = true
 	}
-	uniqueImages := make([]string, len(imagesMap))
+	unique := make([]string, len(m))
 	i := 0
-	for image := range imagesMap {
-		uniqueImages[i] = image
+	for image := range m {
+		unique[i] = image
 		i++
 	}
-	return uniqueImages
+	return unique
 }

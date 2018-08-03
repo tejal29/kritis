@@ -27,13 +27,11 @@ import (
 	"github.com/grafeas/kritis/pkg/kritis/admission/constants"
 	kritisv1beta1 "github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
 	kritisconstants "github.com/grafeas/kritis/pkg/kritis/constants"
-	"github.com/grafeas/kritis/pkg/kritis/container"
 	"github.com/grafeas/kritis/pkg/kritis/crd/securitypolicy"
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
 	"github.com/grafeas/kritis/pkg/kritis/metadata/containeranalysis"
 	"github.com/grafeas/kritis/pkg/kritis/pods"
-	"github.com/grafeas/kritis/pkg/kritis/secrets"
-	"github.com/grafeas/kritis/pkg/kritis/util"
+	"github.com/grafeas/kritis/pkg/kritis/review"
 	"github.com/grafeas/kritis/pkg/kritis/violation"
 	"k8s.io/api/admission/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -44,26 +42,31 @@ import (
 )
 
 type config struct {
-	retrievePod                 func(r *http.Request) (*v1.Pod, v1beta1.AdmissionReview, error)
-	retrieveDeployment          func(r *http.Request) (*appsv1.Deployment, v1beta1.AdmissionReview, error)
-	fetchMetadataClient         func() (metadata.MetadataFetcher, error)
-	fetchImageSecurityPolicies  func(namespace string) ([]kritisv1beta1.ImageSecurityPolicy, error)
-	validateImageSecurityPolicy func(isp kritisv1beta1.ImageSecurityPolicy, image string, client metadata.MetadataFetcher) ([]securitypolicy.SecurityPolicyViolation, error)
-	validateAttestations        func(image string, metadataClient metadata.MetadataFetcher, ns string) bool
+	retrievePod                func(r *http.Request) (*v1.Pod, v1beta1.AdmissionReview, error)
+	retrieveDeployment         func(r *http.Request) (*appsv1.Deployment, v1beta1.AdmissionReview, error)
+	fetchMetadataClient        func() (metadata.MetadataFetcher, error)
+	fetchImageSecurityPolicies func(namespace string) ([]kritisv1beta1.ImageSecurityPolicy, error)
+	review                     review.Config
 }
 
 var (
 	// For testing
-	admissionConfig = config{
-		retrievePod:                 unmarshalPod,
-		retrieveDeployment:          unmarshalDeployment,
-		fetchMetadataClient:         metadataClient,
-		fetchImageSecurityPolicies:  securitypolicy.ImageSecurityPolicies,
-		validateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
-		validateAttestations:        hasValidImageAttestations,
+	// reviewConfig sets the default for the ValidatingWebhookConfiguration
+	reviewConfig = review.Config{
+		ValidateImageSecurityPolicy: securitypolicy.ValidateImageSecurityPolicy,
+		ValidateAttestations:        review.HasValidImageAttestations,
+		FullVerification:            false,
 	}
 
-	defaultViolationStrategy = violation.LoggingStrategy{}
+	admissionConfig = config{
+		retrievePod:                unmarshalPod,
+		retrieveDeployment:         unmarshalDeployment,
+		fetchMetadataClient:        metadataClient,
+		fetchImageSecurityPolicies: securitypolicy.ImageSecurityPolicies,
+		review: reviewConfig,
+	}
+
+	defaultViolationStrategy = &violation.LoggingStrategy{}
 )
 
 var (
@@ -159,10 +162,10 @@ func AdmissionReviewHandler(w http.ResponseWriter, r *http.Request) {
 
 func reviewDeployment(deployment *appsv1.Deployment, ar *v1beta1.AdmissionReview) {
 	for _, c := range deployment.Spec.Template.Spec.Containers {
-		reviewImages([]string{c.Image}, deployment.Namespace, ar)
+		reviewImages([]string{c.Image}, deployment.Namespace, nil, ar)
 	}
 	for _, c := range deployment.Spec.Template.Spec.InitContainers {
-		reviewImages([]string{c.Image}, deployment.Namespace, ar)
+		reviewImages([]string{c.Image}, deployment.Namespace, nil, ar)
 	}
 }
 
@@ -174,14 +177,7 @@ func createDeniedResponse(ar *v1beta1.AdmissionReview, message string) {
 	}
 }
 
-func reviewImages(images []string, ns string, ar *v1beta1.AdmissionReview) {
-	images = util.GetUniqueImages(images)
-	images = util.RemoveGloballyWhitelistedImages(images)
-	if len(images) == 0 {
-		glog.Infof("images are all globally whitelisted, returning successful status", images)
-		return
-	}
-	// Validate images in the pod against ImageSecurityPolicies in the same namespace
+func reviewImages(images []string, ns string, pod *v1.Pod, ar *v1beta1.AdmissionReview) {
 	isps, err := admissionConfig.fetchImageSecurityPolicies(ns)
 	if err != nil {
 		errMsg := fmt.Sprintf("error getting image security policies: %v", err)
@@ -189,50 +185,19 @@ func reviewImages(images []string, ns string, ar *v1beta1.AdmissionReview) {
 		createDeniedResponse(ar, errMsg)
 		return
 	}
-	glog.Infof("Got isps %v", isps)
-	// get the client we will get vulnz from
-	metadataClient, err := admissionConfig.fetchMetadataClient()
+	client, err := admissionConfig.fetchMetadataClient()
 	if err != nil {
 		errMsg := fmt.Sprintf("error getting metadata client: %v", err)
 		glog.Errorf(errMsg)
 		createDeniedResponse(ar, errMsg)
 		return
 	}
-	for _, isp := range isps {
-		for _, image := range images {
-			glog.Infof("Check if %s as valid Attestations.", image)
-			if admissionConfig.validateAttestations(image, metadataClient, ns) {
-				glog.Info("Valid Attestations Found.")
-				return
-			}
-			glog.Info("No Valid Attestations Found. Proceeding with next checks")
-
-			glog.Infof("Getting vulnz for %s", image)
-			violations, err := admissionConfig.validateImageSecurityPolicy(isp, image, metadataClient)
-			if err != nil {
-				errMsg := fmt.Sprintf("error validating image security policy %v", err)
-				glog.Errorf(errMsg)
-				createDeniedResponse(ar, errMsg)
-				return
-			}
-			// Check if one of the violations is that the image is not fully qualified
-			for _, v := range violations {
-				if v.Violation == securitypolicy.UnqualifiedImageViolation {
-					errMsg := fmt.Sprintf("%s is not a fully qualified image", image)
-					glog.Errorf(errMsg)
-					createDeniedResponse(ar, errMsg)
-					return
-				}
-			}
-			if len(violations) != 0 {
-				defaultViolationStrategy.HandleViolation(image, ns, violations)
-				errMsg := fmt.Sprintf("found violations in %s", image)
-				glog.Errorf(errMsg)
-				createDeniedResponse(ar, errMsg)
-				return
-			}
-		}
+	glog.Infof("Got isps %v", isps)
+	r := review.New(client, defaultViolationStrategy)
+	if err := r.Review(images, isps, pod, admissionConfig.review); err != nil {
+		createDeniedResponse(ar, err.Error())
 	}
+	return
 }
 
 func reviewPod(pod *v1.Pod, ar *v1beta1.AdmissionReview) {
@@ -241,7 +206,7 @@ func reviewPod(pod *v1.Pod, ar *v1beta1.AdmissionReview) {
 		glog.Infof("found breakglass annotation, returning successful status")
 		return
 	}
-	reviewImages(pods.Images(*pod), pod.Namespace, ar)
+	reviewImages(pods.Images(*pod), pod.Namespace, pod, ar)
 }
 
 // TODO(aaron-prindle) remove these functions
@@ -289,37 +254,4 @@ func checkBreakglass(pod *v1.Pod) bool {
 // TODO: update this once we have more metadata clients
 func metadataClient() (metadata.MetadataFetcher, error) {
 	return containeranalysis.NewContainerAnalysisClient()
-}
-
-// hasValidImageAttestations return true if any one image attestation is verified.
-func hasValidImageAttestations(image string, metadataClient metadata.MetadataFetcher, ns string) bool {
-	host, err := container.NewAtomicContainerSig(image, map[string]string{})
-	if err != nil {
-		glog.Info(err)
-		return false
-	}
-	pgpAttestations, err := metadataClient.GetAttestations(image)
-	if err != nil {
-		glog.Infof("Error while fetching attestations %s", err)
-		return false
-	}
-	if len(pgpAttestations) == 0 {
-		glog.Infof(`No attestations found for this image.
-This normally happens when you deploy a pod before kritis or no attestation authority is deployed.
-Please see instructions `)
-	}
-	valid := false
-	for _, pgpAttestation := range pgpAttestations {
-		// Get Secret from key id.
-		secret, err := secrets.GetSecret(ns, pgpAttestation.KeyId)
-		if err != nil {
-			glog.Infof("Could not find secret %s in namespace %s for attestation verification", secret.SecretName, ns)
-		}
-		if err = host.VerifyAttestationSignature(secret.PublicKey, pgpAttestation.Signature); err != nil {
-			glog.Infof("Could not find verify attestation for attestation authority", secret.SecretName)
-		} else {
-			valid = true
-		}
-	}
-	return valid
 }
