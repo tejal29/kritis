@@ -19,6 +19,7 @@ package util
 import (
 	"os"
 
+	"github.com/golang/glog"
 	"github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
 	"github.com/grafeas/kritis/pkg/kritis/attestation"
 	"github.com/grafeas/kritis/pkg/kritis/container"
@@ -33,6 +34,19 @@ func ExitIfErr(cmd *cobra.Command, err error) {
 		cmd.Println(err)
 		os.Exit(1)
 	}
+}
+
+// UniqueImages returns unique images in the list of images.
+func UniqueImages(images []string) []string {
+	m := map[string]bool{}
+	l := []string{}
+	for _, i := range images {
+		if _, ok := m[i]; !ok {
+			m[i] = true
+			l = append(l, i)
+		}
+	}
+	return l
 }
 
 func CreateAttestationSignature(image string, pgpSigningKey *secrets.PGPSigningSecret) (string, error) {
@@ -54,4 +68,45 @@ func GetOrCreateAttestationNote(c metadata.Fetcher, a *v1beta1.AttestationAuthor
 		return n, nil
 	}
 	return c.CreateAttestationNote(a)
+}
+
+// HasAllValidHostSignature returns true if valid attestations are present for AttestationAuthorities in auths.
+// If auths is a map of AttestationAuthority Name.
+func HasAllValidHostSignature(h *container.AtomicContainerSig, p []metadata.PGPAttestation, ns string, auths map[string]bool, secret secrets.Fetcher) bool {
+	for _, a := range p {
+		if _, ok := auths[a.KeyID]; !ok {
+			continue
+		}
+		// Get Secret from key id.
+		s, err := secret(ns, a.KeyID)
+		if err != nil {
+			glog.Errorf("could not find secret %s in namespace %s for attestation verification", a.KeyID, ns)
+			return false
+		}
+		if err = h.VerifyAttestationSignature(s.PublicKey, a.Signature); err != nil {
+			glog.Errorf("could not find verify attestation for attestation authority %s", a.KeyID)
+			return false
+		}
+	}
+	return true
+}
+
+// HasAnyValidHostSignature returns true if one valid attestation exists.
+func HasAnyValidHostSignature(h *container.AtomicContainerSig, p []metadata.PGPAttestation,
+	ns string, secret secrets.Fetcher) bool {
+
+	for _, a := range p {
+		// Get Secret from key id.
+		s, err := secret(ns, a.KeyID)
+		if err != nil {
+			glog.Errorf("could not find secret %s in namespace %s for attestation verification", a.KeyID, ns)
+			continue
+		}
+		if err = h.VerifyAttestationSignature(s.PublicKey, a.Signature); err != nil {
+			glog.Errorf("could not find verify attestation for attestation authority %s", a.KeyID)
+		} else {
+			return true
+		}
+	}
+	return false
 }

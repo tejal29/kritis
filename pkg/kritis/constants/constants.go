@@ -61,3 +61,8 @@ var (
 		"gcr.io/kritis-project/postinstall",
 		"gcr.io/kritis-project/predelete"}
 )
+
+var (
+	// Tutorial points to github tutorial link
+	Tutorial = "https://github.com/grafeas/kritis/blob/master/tutorial.md#2-setting-up-an-attestationauthority"
+)

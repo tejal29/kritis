@@ -14,10 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package review
+package isp
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -30,74 +29,6 @@ import (
 	"github.com/grafeas/kritis/pkg/kritis/violation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-func TestHasValidAttestations(t *testing.T) {
-	successSec := testutil.CreateSecret(t, "test-success")
-	sig, err := util.CreateAttestationSignature(testutil.QualifiedImage, successSec)
-	if err != nil {
-		t.Fatalf("unexpected error %v", err)
-	}
-	anotherSig, err := util.CreateAttestationSignature(testutil.IntTestImage, successSec)
-	if err != nil {
-		t.Fatalf("unexpected error %v", err)
-	}
-	tcs := []struct {
-		name         string
-		expected     bool
-		attestations []metadata.PGPAttestation
-	}{
-		{"atleast one valid sig", true, []metadata.PGPAttestation{
-			{
-				Signature: sig,
-				KeyID:     "test-success",
-			}, {
-				Signature: "invalid-sig",
-				KeyID:     "test-sucess",
-			}}},
-		{"no valid sig", false, []metadata.PGPAttestation{
-			{
-				Signature: "invalid-sig",
-				KeyID:     "test-sucess",
-			}}},
-		{"invalid secret", false, []metadata.PGPAttestation{
-			{
-				Signature: "invalid-sig",
-				KeyID:     "invalid",
-			}}},
-		{"valid sig over another host", false, []metadata.PGPAttestation{
-			{
-				Signature: anotherSig,
-				KeyID:     "test-success",
-			}}},
-	}
-	secs := map[string]*secrets.PGPSigningSecret{
-		"test-success": successSec,
-	}
-	sMock := func(namespace string, name string) (*secrets.PGPSigningSecret, error) {
-		s, ok := secs[name]
-		if !ok {
-			return nil, fmt.Errorf("secret not found")
-		}
-		return s, nil
-	}
-	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			cMock := &testutil.MockMetadataClient{
-				PGPAttestations: tc.attestations,
-			}
-			r := New(cMock, &Config{
-				Validate:  nil,
-				Secret:    sMock,
-				IsWebhook: true,
-				Strategy:  nil,
-			})
-			actual := r.hasValidImageAttestations(testutil.QualifiedImage, tc.attestations, "test-namespace")
-			if actual != tc.expected {
-				t.Fatalf("Expected %v, Got %v", tc.expected, actual)
-			}
-		})
-	}
-}
 
 func TestReview(t *testing.T) {
 	sec := testutil.CreateSecret(t, "sec")
@@ -116,12 +47,14 @@ func TestReview(t *testing.T) {
 		return sec, nil
 	}
 	validAtts := []metadata.PGPAttestation{{Signature: sigVuln, KeyID: "sec"}}
-	var isps = []v1beta1.ImageSecurityPolicy{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: "foo",
+	ispFetcher = func(ns string) ([]v1beta1.ImageSecurityPolicy, error) {
+		return []v1beta1.ImageSecurityPolicy{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "foo",
+				},
 			},
-		},
+		}, nil
 	}
 	authFetcher = func(ns string) ([]v1beta1.AttestationAuthority, error) {
 		return []v1beta1.AttestationAuthority{{
@@ -240,7 +173,7 @@ func TestReview(t *testing.T) {
 				IsWebhook: tc.isWebhook,
 				Strategy:  &th,
 			})
-			if err := r.Review([]string{tc.image}, isps, nil); (err != nil) != tc.shdErr {
+			if err := r.Review("test", []string{tc.image}, cMock, nil); (err != nil) != tc.shdErr {
 				t.Errorf("expected review to return error %t, actual error %s", tc.shdErr, err)
 			}
 			if len(th.Violations) != tc.handledViolations {

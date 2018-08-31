@@ -18,7 +18,6 @@ package buildpolicy
 
 import (
 	"fmt"
-	"regexp"
 
 	"github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
 	clientset "github.com/grafeas/kritis/pkg/kritis/client/clientset/versioned"
@@ -46,17 +45,4 @@ func BuildPolicies(namespace string) ([]v1beta1.BuildPolicy, error) {
 		return nil, fmt.Errorf("error listing all image policy requirements: %v", err)
 	}
 	return list.Items, nil
-}
-
-// ValidateBuildPolicy checks if an image satisfies BP requirements.
-// It returns an error if an image does not pass,
-func ValidateBuildPolicy(bp v1beta1.BuildPolicy, builtFrom string) error {
-	ok, err := regexp.MatchString(bp.Spec.BuildRequirements.BuiltFrom, builtFrom)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("Source %q does not match required %q", builtFrom, bp.Spec.BuildRequirements.BuiltFrom)
-	}
-	return nil
 }

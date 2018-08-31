@@ -30,6 +30,7 @@ import (
 	"github.com/grafeas/kritis/pkg/kritis/crd/securitypolicy"
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
 	"github.com/grafeas/kritis/pkg/kritis/metadata/containeranalysis"
+	"github.com/grafeas/kritis/pkg/kritis/policy"
 	"github.com/grafeas/kritis/pkg/kritis/review"
 	"github.com/grafeas/kritis/pkg/kritis/secrets"
 	"github.com/grafeas/kritis/pkg/kritis/violation"
@@ -46,6 +47,7 @@ type config struct {
 	retrieveDeployment         func(r *http.Request) (*appsv1.Deployment, v1beta1.AdmissionReview, error)
 	fetchMetadataClient        func() (metadata.Fetcher, error)
 	fetchImageSecurityPolicies func(namespace string) ([]kritisv1beta1.ImageSecurityPolicy, error)
+	policies                   []policy.Policy
 }
 
 var (
@@ -201,21 +203,7 @@ func createDeniedResponse(ar *v1beta1.AdmissionReview, message string) {
 }
 
 func reviewImages(images []string, ns string, pod *v1.Pod, ar *v1beta1.AdmissionReview) {
-	// NOTE: pod may be nil if we are reviewing images for a replica set.
-	glog.Infof("Reviewing images for %s in namespace %s: %s", pod, ns, images)
-	isps, err := admissionConfig.fetchImageSecurityPolicies(ns)
-	if err != nil {
-		errMsg := fmt.Sprintf("error getting image security policies: %v", err)
-		glog.Errorf(errMsg)
-		createDeniedResponse(ar, errMsg)
-		return
-	}
-	if len(isps) == 0 {
-		glog.Errorf("No ISP's found in namespace %s", ns)
-	} else {
-		glog.Infof("Found %d ISPs to review image against", len(isps))
-	}
-
+	// Create Metadata client
 	client, err := admissionConfig.fetchMetadataClient()
 	if err != nil {
 		errMsg := fmt.Sprintf("error getting metadata client: %v", err)
@@ -228,10 +216,10 @@ func reviewImages(images []string, ns string, pod *v1.Pod, ar *v1beta1.Admission
 		Strategy:  defaultViolationStrategy,
 		IsWebhook: true,
 		Secret:    secrets.Fetch,
-		Validate:  securitypolicy.ValidateImageSecurityPolicyGen(),
+		Validate:  securitypolicy.ValidateImageSecurityPolicy,
 	})
 
-	if err := r.Review(images, isps, pod); err != nil {
+	if err := r.Review(images, pod, admissionConfig.polices); err != nil {
 		glog.Infof("Denying %s in namespace %s: %v", pod, ns, err)
 		createDeniedResponse(ar, err.Error())
 	}

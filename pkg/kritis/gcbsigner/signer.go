@@ -73,7 +73,7 @@ func (s Signer) ValidateAndSign(prov BuildProvenance, bps []v1beta1.BuildPolicy)
 }
 
 func (s Signer) addAttestation(image string, ns string, authority string) error {
-	// Get AttestaionAuthority specified in the buildpolicy.
+	// Get AttestaionAuthority specied in the buildpolicy.
 	a, err := authFetcher(ns, authority)
 	if err != nil {
 		return err
@@ -88,6 +88,8 @@ func (s Signer) addAttestation(image string, ns string, authority string) error 
 		return err
 	}
 	// Create Attestation Signature
-	_, err = s.client.CreateAttestationOccurence(n, image, sec)
-	return err
+	if _, err := s.client.CreateAttestationOccurence(n, image, sec); err != nil {
+		return err
+	}
+	return nil
 }

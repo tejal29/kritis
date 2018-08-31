@@ -19,7 +19,6 @@ package securitypolicy
 import (
 	"fmt"
 
-	"github.com/golang/glog"
 	"github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
 	clientset "github.com/grafeas/kritis/pkg/kritis/client/clientset/versioned"
 	"github.com/grafeas/kritis/pkg/kritis/constants"
@@ -31,7 +30,7 @@ import (
 )
 
 // ValidateFunc defines the type for Validating Image Security Policies
-type ValidateFunc func(isp v1beta1.ImageSecurityPolicy, image string, client metadata.Fetcher) ([]Violation, error)
+type ValidateFunc func(isp v1beta1.ImageSecurityPolicy, image string, client metadata.Fetcher) ([]policy.Violation, error)
 
 // ImageSecurityPolicies returns all ISP's in the specified namespaces
 // Pass in an empty string to get all ISPs in all namespaces
@@ -52,53 +51,26 @@ func ImageSecurityPolicies(namespace string) ([]v1beta1.ImageSecurityPolicy, err
 	return list.Items, nil
 }
 
-type Validator struct {
-	// imageToVulnz is used as a cache for images to vulnz for a single run
-	imageToVulnz map[string][]metadata.Vulnerability
-}
-
-func NewValidator() *Validator {
-	v := Validator{}
-	v.imageToVulnz = map[string][]metadata.Vulnerability{}
-	return &v
-}
-
-func ValidateImageSecurityPolicyGen() func(isp v1beta1.ImageSecurityPolicy, image string, client metadata.Fetcher) ([]Violation, error) {
-	v := NewValidator()
-	return func(isp v1beta1.ImageSecurityPolicy, image string, client metadata.Fetcher) ([]Violation, error) {
-		return v.ValidateImageSecurityPolicy(isp, image, client)
-	}
-}
-
 // ValidateImageSecurityPolicy checks if an image satisfies ISP requirements
 // It returns a list of vulnerabilities that don't pass
-func (v *Validator) ValidateImageSecurityPolicy(isp v1beta1.ImageSecurityPolicy, image string, client metadata.Fetcher) ([]Violation, error) {
+func ValidateImageSecurityPolicy(isp v1beta1.ImageSecurityPolicy, image string, client metadata.Fetcher) ([]policy.Violation, error) {
 	// First, check if image is whitelisted
 	if imageInWhitelist(isp, image) {
 		return nil, nil
 	}
-	var violations []Violation
+	var violations []policy.Violation
 	// Next, check if image in qualified
 	if !resolve.FullyQualifiedImage(image) {
-		violations = append(violations, Violation{
-			Violation: UnqualifiedImageViolation,
-			Reason:    UnqualifiedImageReason(image),
+		violations = append(violations, policy.Violation{
+			Violation: policy.UnqualifiedImageViolation,
+			Reason:    unqualifiedImageReason(image),
 		})
 		return violations, nil
 	}
 	// Now, check vulnz in the image
-	var vulnz []metadata.Vulnerability
-	var err error
-	if _, ok := v.imageToVulnz[image]; ok {
-		glog.Infof("found cached vulnz for image %s", image)
-		vulnz = v.imageToVulnz[image]
-	} else {
-		glog.Infof("no cached vulnz for image %s, getting from api", image)
-		vulnz, err = client.Vulnerabilities(image)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get vulnerabilities for %s: %v", image, err)
-		}
-		v.imageToVulnz[image] = vulnz
+	vulnz, err := client.GetVulnerabilities(image)
+	if err != nil {
+		return nil, err
 	}
 	maxSev := isp.Spec.PackageVulnerabilityRequirements.MaximumSeverity
 	if maxSev == "" {
@@ -125,10 +97,9 @@ func (v *Validator) ValidateImageSecurityPolicy(isp v1beta1.ImageSecurityPolicy,
 			if ok {
 				continue
 			}
-			violations = append(violations, Violation{
-				Vulnerability: v,
-				Violation:     FixUnavailableViolation,
-				Reason:        FixUnavailableReason(image, v, isp),
+			violations = append(violations, policy.Violation{
+				Violation: policy.FixUnavailableViolation,
+				Reason:    fixUnavailableReason(image, v, isp),
 			})
 			continue
 		}
@@ -139,10 +110,9 @@ func (v *Validator) ValidateImageSecurityPolicy(isp v1beta1.ImageSecurityPolicy,
 		if ok {
 			continue
 		}
-		violations = append(violations, Violation{
-			Vulnerability: v,
-			Violation:     SeverityViolation,
-			Reason:        SeverityReason(image, v, isp),
+		violations = append(violations, policy.Violation{
+			Violation: policy.SeverityViolation,
+			Reason:    severityReason(image, v, isp),
 		})
 	}
 	return violations, nil
