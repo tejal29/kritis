@@ -19,21 +19,16 @@ import (
 	"fmt"
 
 	"github.com/golang/glog"
+	"github.com/grafeas/kritis/pkg/kritis"
 	"github.com/grafeas/kritis/pkg/kritis/constants"
 	"github.com/grafeas/kritis/pkg/kritis/pods"
-	"github.com/grafeas/kritis/pkg/kritis/policy"
 	"k8s.io/api/core/v1"
 )
-
-type Strategy interface {
-	HandleViolations(pod *v1.Pod, violations []policy.Violation) error
-	HandleAttestation(images string, pod *v1.Pod, isAttested bool) error
-}
 
 type LoggingStrategy struct {
 }
 
-func (l *LoggingStrategy) HandleViolations(pod *v1.Pod, vs []policy.Violation) error {
+func (l *LoggingStrategy) HandleViolations(pod *v1.Pod, vs []kritis.Violation) error {
 	glog.Info("HandleViolation via LoggingStrategy")
 	if len(vs) == 0 {
 		return nil
@@ -58,7 +53,7 @@ func (l *LoggingStrategy) HandleAttestation(images []string, pod *v1.Pod, isAtte
 type AnnotationStrategy struct {
 }
 
-func (a *AnnotationStrategy) HandleViolations(pod *v1.Pod, violations []policy.Violation) error {
+func (a *AnnotationStrategy) HandleViolations(pod *v1.Pod, violations []kritis.Violation) error {
 	// First, remove "kritis.grafeas.io/invalidImageSecPolicy" label/annotation in case it doesn't apply anymore
 	if err := pods.DeleteLabelsAndAnnotations(*pod, []string{constants.InvalidImageSecPolicy}, []string{constants.InvalidImageSecPolicy}); err != nil {
 		return err

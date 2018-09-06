@@ -35,5 +35,20 @@ type Policy interface {
 	Name() string
 }
 
-type Violation interface {
+// Reason defines the Violation Reason
+type Reason string
+
+// Violation defines the policy violation
+type Violation struct {
+	Image     string
+	Violation int
+	Reason    Reason
 }
+
+// A list of security policy violations
+// TODO: Add Attestation checking violations
+const (
+	UnqualifiedImageViolation int = iota
+	FixUnavailableViolation
+	SeverityViolation
+)

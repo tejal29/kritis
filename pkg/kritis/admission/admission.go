@@ -203,6 +203,7 @@ func createDeniedResponse(ar *v1beta1.AdmissionReview, message string) {
 }
 
 func reviewImages(images []string, ns string, pod *v1.Pod, ar *v1beta1.AdmissionReview) {
+	// NOTE: pod may be nil if we are reviewing images for a replica set.
 	// Create Metadata client
 	client, err := admissionConfig.fetchMetadataClient()
 	if err != nil {

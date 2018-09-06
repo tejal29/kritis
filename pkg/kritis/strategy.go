@@ -13,23 +13,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+package kritis
 
-package policy
-
-// Reason defines the Violation Reason
-type Reason string
-
-// Violation defines the policy violation
-type Violation struct {
-	Image     string
-	Violation int
-	Reason    Reason
-}
-
-// A list of security policy violations
-// TODO: Add Attestation checking violations
-const (
-	UnqualifiedImageViolation int = iota
-	FixUnavailableViolation
-	SeverityViolation
+import (
+	"k8s.io/api/core/v1"
 )
+
+type Strategy interface {
+	HandleViolations(pod *v1.Pod, violations []Violation) error
+	HandleAttestation(images string, pod *v1.Pod, isAttested bool) error
+}

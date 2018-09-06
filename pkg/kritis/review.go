@@ -21,22 +21,20 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
-	"github.com/grafeas/kritis/pkg/kritis"
+
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
-	"github.com/grafeas/kritis/pkg/kritis/policy"
-	"github.com/grafeas/kritis/pkg/kritis/violation"
 	"k8s.io/api/core/v1"
 )
 
 // Reviewer defines reviewer struct
 type Reviewer struct {
-	config *Config
+	config *ReviewConfig
 	client metadata.Fetcher
 }
 
 // ReviewConfig defines ReviewConfig
 type ReviewConfig struct {
-	Strategy  violation.Strategy
+	Strategy  Strategy
 	IsWebhook bool
 }
 
@@ -50,7 +48,7 @@ func New(client metadata.Fetcher, c *ReviewConfig) Reviewer {
 
 // Review reviews a set of images against a set of policies
 // Returns error if violations are found and handles them as per violation strategy
-func (r Reviewer) Review(images []string, pod *v1.Pod, ps []kritis.Policy) error {
+func (r Reviewer) Review(images []string, pod *v1.Pod, ps []Policy) error {
 	errMsgs := []string{}
 	for _, p := range ps {
 		vs, err := p.Review(pod.Namespace, images, r.client, pod)
@@ -72,11 +70,11 @@ func (r Reviewer) Review(images []string, pod *v1.Pod, ps []kritis.Policy) error
 	return nil
 }
 
-func (r Reviewer) handleViolations(image string, pod *v1.Pod, violations []policy.Violation) error {
+func (r Reviewer) handleViolations(image string, pod *v1.Pod, violations []Violation) error {
 	errMsg := fmt.Sprintf("found violations in %s", image)
 	// Check if one of the violations is that the image is not fully qualified
 	for _, v := range violations {
-		if v.Violation == policy.UnqualifiedImageViolation {
+		if v.Violation == UnqualifiedImageViolation {
 			errMsg = fmt.Sprintf(`%s is not a fully qualified image.
 			  You can run 'kubectl plugin resolve-tags' to qualify all images with a digest.
 			  Instructions for installing the plugin can be found at https://github.com/grafeas/kritis/blob/master/cmd/kritis/kubectl/plugins/resolve`, image)
