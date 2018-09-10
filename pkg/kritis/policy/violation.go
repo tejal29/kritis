@@ -32,6 +32,7 @@ const (
 
 // Violation represents a Policy Violation.
 type Violation interface {
+	Image() string
 	Type() ViolationType
 	Reason() Reason
 	Details() interface{}

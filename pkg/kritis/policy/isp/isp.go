@@ -27,6 +27,7 @@ import (
 	"github.com/grafeas/kritis/pkg/kritis/crd/securitypolicy"
 	"github.com/grafeas/kritis/pkg/kritis/kubectl/plugins/resolve"
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
+	"github.com/grafeas/kritis/pkg/kritis/policy"
 	"github.com/grafeas/kritis/pkg/kritis/secrets"
 	"github.com/grafeas/kritis/pkg/kritis/util"
 	ca "google.golang.org/genproto/googleapis/devtools/containeranalysis/v1alpha1"
@@ -47,8 +48,19 @@ var (
 
 // Review reviews an image against ImageSecurityPolicy and attests
 // an image if its valid.
-func (p Policy) Review(ns string, images []string, client metadata.Fetcher, pod *v1.Pod) ([]Violation, error) {
+func (p Policy) Review(ns string, images []string, client metadata.Fetcher, pod *v1.Pod) ([]policy.Violation, error) {
 	isps, err := ispFetcher(ns)
+	if err != nil {
+		errMsg := fmt.Sprintf("error getting image security policies: %v", err)
+		glog.Errorf(errMsg)
+		return nil, err
+	}
+	if len(isps) == 0 {
+		glog.Errorf("No ISP's found in namespace %s", ns)
+		return nil, nil
+	} else {
+		glog.Infof("Found %d ISPs to review image against", len(isps))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +82,8 @@ func (p Policy) Review(ns string, images []string, client metadata.Fetcher, pod 
 			}
 			glog.Infof("Getting vulnz for %s", image)
 			if violations, err := validate(isp, image, client); err != nil || len(violations) != 0 {
+				// TODO: (tejaldesai) Get violations and errors for all images.
+				// See https://github.com/grafeas/kritis/issues/279 for details.
 				return violations, err
 			}
 			glog.Infof("Found no violations in %s", image)
@@ -133,17 +147,17 @@ func getUnAttested(auths []v1beta1.AttestationAuthority, atts []metadata.PGPAtte
 
 // ValidateImageSecurityPolicy checks if an image satisfies ISP requirements
 // It returns a list of vulnerabilities that don't pass
-func ValidateImageSecurityPolicy(isp v1beta1.ImageSecurityPolicy, image string, client metadata.Fetcher) ([]Violation, error) {
+func ValidateImageSecurityPolicy(isp v1beta1.ImageSecurityPolicy, image string, client metadata.Fetcher) ([]policy.Violation, error) {
 	// First, check if image is whitelisted
 	if imageInWhitelist(isp, image) {
 		return nil, nil
 	}
-	var violations []Violation
+	var violations []policy.Violation
 	// Next, check if image in qualified
 	if !resolve.FullyQualifiedImage(image) {
 		violations = append(violations, Violation{
-			Violation: UnqualifiedImageViolation,
-			Reason:    UnqualifiedImageReason(image),
+			vType:  policy.UnqualifiedImageViolation,
+			reason: UnqualifiedImageReason(image),
 		})
 		return violations, nil
 	}
@@ -178,9 +192,10 @@ func ValidateImageSecurityPolicy(isp v1beta1.ImageSecurityPolicy, image string, 
 				continue
 			}
 			violations = append(violations, Violation{
-				Vulnerability: v,
-				Violation:     FixUnavailableViolation,
-				Reason:        FixUnavailableReason(image, v, isp),
+				image:  image,
+				vuln:   v,
+				vType:  policy.FixUnavailableViolation,
+				reason: FixUnavailableReason(image, v, isp),
 			})
 			continue
 		}
@@ -192,9 +207,10 @@ func ValidateImageSecurityPolicy(isp v1beta1.ImageSecurityPolicy, image string, 
 			continue
 		}
 		violations = append(violations, Violation{
-			Vulnerability: v,
-			Violation:     SeverityViolation,
-			Reason:        SeverityReason(image, v, isp),
+			image:  image,
+			vuln:   v,
+			vType:  policy.SeverityViolation,
+			reason: SeverityReason(image, v, isp),
 		})
 	}
 	return violations, nil

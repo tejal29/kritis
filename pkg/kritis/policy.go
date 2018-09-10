@@ -14,23 +14,24 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package policy
+package kritis
 
 import (
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
+	"github.com/grafeas/kritis/pkg/kritis/policy"
 	"k8s.io/api/core/v1"
 )
 
 // Policy defines a policy enforced by Kritis.
 type Policy interface {
 	// Reviews a set of images against the policy.
-	Review(ns string, images []string, client metadata.Fetcher, pod *v1.Pod) ([]Violation, error)
+	Review(ns string, images []string, client metadata.Fetcher, pod *v1.Pod) ([]policy.Violation, error)
 	// HasValidAttestations checks if a policy has any attestations
-	HasValidAttestations(ns string, images []string) bool
-	// Attest a set of with required attestations.
-	Attest(ns string, images []string, client metadata.Fetcher) error
-	// Annotation returns a string annotation value for given violation.
-	Annotate([]Violation) string
+	// HasValidAttestations(ns string, images []string) bool
+	// // Attest a set of with required attestations.
+	// Attest(ns string, images []string, client metadata.Fetcher) error
+	// // Annotation returns a string annotation value for given violation.
+	// Annotate([]policy.Violation) string
 	// Name
 	Name() string
 }

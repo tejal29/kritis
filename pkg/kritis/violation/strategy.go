@@ -26,21 +26,23 @@ import (
 )
 
 type Strategy interface {
-	HandleViolation(image string, pod *v1.Pod, violations []policy.Violation) error
+	HandleViolations(pod *v1.Pod, violations []policy.Violation) error
 	HandleAttestation(image string, pod *v1.Pod, isAttested bool) error
 }
 
 type LoggingStrategy struct {
 }
 
-func (l *LoggingStrategy) HandleViolation(image string, pod *v1.Pod, violations []policy.Violation) error {
+func (l *LoggingStrategy) HandleViolations(pod *v1.Pod, violations []policy.Violation) error {
 	glog.Info("HandleViolation via LoggingStrategy")
 	if len(violations) == 0 {
 		return nil
 	}
-	glog.Warningf("Found violations in image %s", image)
 	for _, v := range violations {
-		glog.Warning(v.Reason())
+		glog.Warningf("Found violations in image %s", v.Image())
+		for _, v := range violations {
+			glog.Warning(v.Reason())
+		}
 	}
 	return nil
 }
@@ -59,7 +61,7 @@ func (l *LoggingStrategy) HandleAttestation(image string, pod *v1.Pod, isAtteste
 type AnnotationStrategy struct {
 }
 
-func (a *AnnotationStrategy) HandleViolation(image string, pod *v1.Pod, violations []policy.Violation) error {
+func (a *AnnotationStrategy) HandleViolations(pod *v1.Pod, violations []policy.Violation) error {
 	// First, remove "kritis.grafeas.io/invalidImageSecPolicy" label/annotation in case it doesn't apply anymore
 	if err := pods.DeleteLabelsAndAnnotations(*pod, []string{constants.InvalidImageSecPolicy}, []string{constants.InvalidImageSecPolicy}); err != nil {
 		return err
@@ -105,8 +107,10 @@ type MemoryStrategy struct {
 	Attestations map[string]bool
 }
 
-func (ms *MemoryStrategy) HandleViolation(image string, p *v1.Pod, v []policy.Violation) error {
-	ms.Violations[image] = true
+func (ms *MemoryStrategy) HandleViolations(p *v1.Pod, vs []policy.Violation) error {
+	for _, v := range vs {
+		ms.Violations[v.Image()] = true
+	}
 	return nil
 }
 

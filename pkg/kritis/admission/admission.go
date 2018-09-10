@@ -24,14 +24,15 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/grafeas/kritis/cmd/kritis/version"
+	"github.com/grafeas/kritis/pkg/kritis"
 	"github.com/grafeas/kritis/pkg/kritis/admission/constants"
 	kritisv1beta1 "github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
 	kritisconstants "github.com/grafeas/kritis/pkg/kritis/constants"
 	"github.com/grafeas/kritis/pkg/kritis/crd/securitypolicy"
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
 	"github.com/grafeas/kritis/pkg/kritis/metadata/containeranalysis"
+	"github.com/grafeas/kritis/pkg/kritis/policy/isp"
 	"github.com/grafeas/kritis/pkg/kritis/review"
-	"github.com/grafeas/kritis/pkg/kritis/secrets"
 	"github.com/grafeas/kritis/pkg/kritis/violation"
 	"k8s.io/api/admission/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -46,7 +47,6 @@ type config struct {
 	retrieveDeployment         func(r *http.Request) (*appsv1.Deployment, v1beta1.AdmissionReview, error)
 	fetchMetadataClient        func() (metadata.Fetcher, error)
 	fetchImageSecurityPolicies func(namespace string) ([]kritisv1beta1.ImageSecurityPolicy, error)
-	reviewer                   func(metadata.Fetcher) reviewer
 }
 
 var (
@@ -56,7 +56,6 @@ var (
 		retrieveDeployment:         unmarshalDeployment,
 		fetchMetadataClient:        metadataClient,
 		fetchImageSecurityPolicies: securitypolicy.ImageSecurityPolicies,
-		reviewer:                   getReviewer,
 	}
 
 	defaultViolationStrategy = &violation.LoggingStrategy{}
@@ -205,19 +204,6 @@ func createDeniedResponse(ar *v1beta1.AdmissionReview, message string) {
 func reviewImages(images []string, ns string, pod *v1.Pod, ar *v1beta1.AdmissionReview) {
 	// NOTE: pod may be nil if we are reviewing images for a replica set.
 	glog.Infof("Reviewing images for %s in namespace %s: %s", pod, ns, images)
-	isps, err := admissionConfig.fetchImageSecurityPolicies(ns)
-	if err != nil {
-		errMsg := fmt.Sprintf("error getting image security policies: %v", err)
-		glog.Errorf(errMsg)
-		createDeniedResponse(ar, errMsg)
-		return
-	}
-	if len(isps) == 0 {
-		glog.Errorf("No ISP's found in namespace %s", ns)
-	} else {
-		glog.Infof("Found %d ISPs to review image against", len(isps))
-	}
-
 	client, err := admissionConfig.fetchMetadataClient()
 	if err != nil {
 		errMsg := fmt.Sprintf("error getting metadata client: %v", err)
@@ -225,10 +211,20 @@ func reviewImages(images []string, ns string, pod *v1.Pod, ar *v1beta1.Admission
 		createDeniedResponse(ar, errMsg)
 		return
 	}
-	r := admissionConfig.reviewer(client)
-	if err := r.Review(images, isps, pod); err != nil {
-		glog.Infof("Denying %s in namespace %s: %v", pod, ns, err)
-		createDeniedResponse(ar, err.Error())
+
+	r := review.New(client, &review.Config{
+		Strategy:  defaultViolationStrategy,
+		IsWebhook: true,
+		Policies:  []kritis.Policy{isp.Policy{}},
+	})
+
+	if errs := r.Review(ns, images, pod); errs != nil {
+		errMsg := ""
+		for _, err := range errs {
+			errMsg += fmt.Sprintf("\n%s", err)
+		}
+		glog.Infof("Denying %s in namespace %s: %v", pod, ns, errMsg)
+		createDeniedResponse(ar, errMsg)
 	}
 }
 
@@ -307,19 +303,4 @@ func checkBreakglass(meta *metav1.ObjectMeta) bool {
 // TODO: update this once we have more metadata clients
 func metadataClient() (metadata.Fetcher, error) {
 	return containeranalysis.NewCache()
-}
-
-func getReviewer(client metadata.Fetcher) reviewer {
-	return review.New(client, &review.Config{
-		Strategy:  defaultViolationStrategy,
-		IsWebhook: true,
-		Secret:    secrets.Fetch,
-		Validate:  securitypolicy.ValidateImageSecurityPolicy,
-	})
-}
-
-// reviewer interface defines an Kritis Reviewer Struct.
-// TODO: This will be removed in future refactoring.
-type reviewer interface {
-	Review(images []string, isps []kritisv1beta1.ImageSecurityPolicy, pod *v1.Pod) error
 }

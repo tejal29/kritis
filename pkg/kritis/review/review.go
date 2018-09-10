@@ -17,17 +17,10 @@ limitations under the License.
 package review
 
 import (
-	"fmt"
-
 	"github.com/golang/glog"
-	"github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
-	"github.com/grafeas/kritis/pkg/kritis/container"
+	"github.com/grafeas/kritis/pkg/kritis"
 	"github.com/grafeas/kritis/pkg/kritis/crd/authority"
-	"github.com/grafeas/kritis/pkg/kritis/crd/securitypolicy"
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
-	"github.com/grafeas/kritis/pkg/kritis/policy"
-	"github.com/grafeas/kritis/pkg/kritis/secrets"
-	"github.com/grafeas/kritis/pkg/kritis/util"
 	"github.com/grafeas/kritis/pkg/kritis/violation"
 	"k8s.io/api/core/v1"
 )
@@ -38,10 +31,9 @@ type Reviewer struct {
 }
 
 type Config struct {
-	Validate  securitypolicy.ValidateFunc
-	Secret    secrets.Fetcher
 	Strategy  violation.Strategy
 	IsWebhook bool
+	Policies  []kritis.Policy
 }
 
 func New(client metadata.Fetcher, c *Config) Reviewer {
@@ -56,151 +48,22 @@ var (
 	authFetcher = authority.Authorities
 )
 
-// Review reviews a set of images against a set of policies
-// Returns error if violations are found and handles them as per violation strategy
-func (r Reviewer) Review(images []string, isps []v1beta1.ImageSecurityPolicy, pod *v1.Pod) error {
-	images = util.RemoveGloballyWhitelistedImages(images)
-	if len(images) == 0 {
-		glog.Infof("images are all globally whitelisted, returning successful status: %s", images)
-		return nil
-	}
-	for _, isp := range isps {
-		glog.Infof("Validating against ImageSecurityPolicy %s", isp.Name)
-		for _, image := range images {
-			glog.Infof("Check if %s as valid Attestations.", image)
-			isAttested, attestations := r.fetchAndVerifyAttestations(image, isp.Namespace, pod)
-			// Skip vulnerability check for Webhook if attestations found.
-			if isAttested && r.config.IsWebhook {
-				continue
-			}
-
-			glog.Infof("Getting vulnz for %s", image)
-			violations, err := r.config.Validate(isp, image, r.client)
-			if err != nil {
-				return fmt.Errorf("error validating image security policy %v", err)
-			}
-			if len(violations) != 0 {
-				return r.handleViolations(image, pod, violations)
-			}
-			if r.config.IsWebhook {
-				if err := r.addAttestations(image, attestations, isp.Namespace); err != nil {
-					glog.Errorf("error adding attestations %s", err)
-				}
-			}
-			glog.Infof("Found no violations for %s within ISP %s", image, isp.Name)
-		}
-	}
-	return nil
-}
-
-func (r Reviewer) fetchAndVerifyAttestations(image string, ns string, pod *v1.Pod) (bool, []metadata.PGPAttestation) {
-	attestations, err := r.client.Attestations(image)
-	if err != nil {
-		glog.Errorf("Error while fetching attestations %s", err)
-		return false, attestations
-	}
-	isAttested := r.hasValidImageAttestations(image, attestations, ns)
-	if err := r.config.Strategy.HandleAttestation(image, pod, isAttested); err != nil {
-		glog.Errorf("error handling attestations %v", err)
-	}
-	return isAttested, attestations
-}
-
-// hasValidImageAttestations return true if any one image attestation is verified.
-func (r Reviewer) hasValidImageAttestations(image string, attestations []metadata.PGPAttestation, ns string) bool {
-	if len(attestations) == 0 {
-		glog.Infof(`No attestations found for image %s.
-This normally happens when you deploy a pod before kritis or no attestation authority is deployed.
-Please see instructions `, image)
-	}
-	host, err := container.NewAtomicContainerSig(image, map[string]string{})
-	if err != nil {
-		glog.Error(err)
-		return false
-	}
-	for _, a := range attestations {
-		// Get Secret from key id.
-		secret, err := r.config.Secret(ns, a.KeyID)
+func (r Reviewer) Review(namespace string, images []string, pod *v1.Pod) []error {
+	errors := []error{}
+	for _, p := range r.config.Policies {
+		// Review each policy
+		vs, err := p.Review(namespace, images, r.client, pod)
 		if err != nil {
-			glog.Errorf("Could not find secret %s in namespace %s for attestation verification", a.KeyID, ns)
-			continue
+			errors = append(errors, err)
 		}
-		if err = host.VerifyAttestationSignature(secret.PublicKey, a.Signature); err != nil {
-			glog.Errorf("Could not find verify attestation for attestation authority %s", a.KeyID)
+		// Handle the violations using the Strategy configured
+		if len(vs) != 0 {
+			if err := r.config.Strategy.HandleViolations(pod, vs); err != nil {
+				glog.Errorf("error handling violations %v", err)
+			}
 		} else {
-			return true
+			// Attest the image with right attestation authorities
 		}
 	}
-	return false
-}
-
-func (r Reviewer) handleViolations(image string, pod *v1.Pod, violations []policy.Violation) error {
-	errMsg := fmt.Sprintf("found violations in %s", image)
-	// Check if one of the violations is that the image is not fully qualified
-	for _, v := range violations {
-		if v.Type() == policy.UnqualifiedImageViolation {
-			errMsg = fmt.Sprintf(`%s is not a fully qualified image.
-			  You can run 'kubectl plugin resolve-tags' to qualify all images with a digest.
-			  Instructions for installing the plugin can be found at https://github.com/grafeas/kritis/blob/master/cmd/kritis/kubectl/plugins/resolve`, image)
-		}
-	}
-	if err := r.config.Strategy.HandleViolation(image, pod, violations); err != nil {
-		return fmt.Errorf("%s. error handling violation %v", errMsg, err)
-	}
-	return fmt.Errorf(errMsg)
-}
-
-func (r Reviewer) addAttestations(image string, atts []metadata.PGPAttestation, ns string) error {
-	// Get all AttestationAuthorities in this namespace.
-	auths, err := authFetcher(ns)
-	if err != nil {
-		return err
-	}
-	if len(auths) == 0 {
-		return fmt.Errorf("no attestation quthorities configured for namespace %s", ns)
-	}
-	// Get all AttestationAuthorities which have not attested the image.
-	errMsgs := []string{}
-	u := getUnAttested(auths, atts)
-	if len(u) == 0 {
-		glog.Info("Attestation exists for all authorities")
-		return nil
-	}
-	for _, a := range u {
-		// Get or Create Note for this this Authority
-		n, err := util.GetOrCreateAttestationNote(r.client, &a)
-		if err != nil {
-			errMsgs = append(errMsgs, err.Error())
-		}
-		// Get secret for this Authority
-		s, err := r.config.Secret(ns, a.Spec.PrivateKeySecretName)
-		if err != nil {
-			errMsgs = append(errMsgs, err.Error())
-		}
-		// Create Attestation Signature
-		if _, err := r.client.CreateAttestationOccurence(n, image, s); err != nil {
-			errMsgs = append(errMsgs, err.Error())
-		}
-
-	}
-	if len(errMsgs) == 0 {
-		return nil
-	}
-	return fmt.Errorf("one or more errors adding attestations: %s", errMsgs)
-}
-
-func getUnAttested(auths []v1beta1.AttestationAuthority, atts []metadata.PGPAttestation) []v1beta1.AttestationAuthority {
-	l := []v1beta1.AttestationAuthority{}
-	m := map[string]bool{}
-	for _, a := range atts {
-		m[a.KeyID] = true
-	}
-
-	for _, a := range auths {
-		_, ok := m[a.Spec.PrivateKeySecretName]
-		if !ok {
-			l = append(l, a)
-		}
-	}
-	return l
+	return errors
 }

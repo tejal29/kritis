@@ -21,14 +21,15 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/grafeas/kritis/pkg/kritis"
 	"github.com/grafeas/kritis/pkg/kritis/admission"
 	"github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
+	"github.com/grafeas/kritis/pkg/kritis/namespaces"
 	"github.com/grafeas/kritis/pkg/kritis/pods"
+	"github.com/grafeas/kritis/pkg/kritis/policy/isp"
 	"github.com/grafeas/kritis/pkg/kritis/review"
-	"github.com/grafeas/kritis/pkg/kritis/secrets"
 
-	"github.com/grafeas/kritis/pkg/kritis/crd/securitypolicy"
 	"github.com/grafeas/kritis/pkg/kritis/violation"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -59,12 +60,11 @@ func NewCronConfig(cs *kubernetes.Clientset, client metadata.Fetcher) *Config {
 		PodLister: pods.Pods,
 		Client:    client,
 		ReviewConfig: &review.Config{
-			Secret:    secrets.Fetch,
 			Strategy:  defaultViolationStrategy,
-			IsWebhook: false,
-			Validate:  securitypolicy.ValidateImageSecurityPolicy,
+			IsWebhook: true,
+			Policies:  []kritis.Policy{isp.Policy{}},
 		},
-		SecurityPolicyLister: securitypolicy.ImageSecurityPolicies,
+		NamespaceLister: namespaces.Namespaces,
 	}
 	return &cfg
 }
@@ -78,12 +78,12 @@ func Start(ctx context.Context, cfg Config, checkInterval time.Duration) {
 		glog.Info("Checking pods.")
 		select {
 		case <-c.C:
-			isps, err := cfg.SecurityPolicyLister("")
+			ns, err := cfg.NamespaceLister()
 			if err != nil {
 				glog.Errorf("fetching image security policies: %s", err)
 				continue
 			}
-			if err := podChecker(cfg, isps); err != nil {
+			if err := podChecker(cfg, ns); err != nil {
 				glog.Errorf("error checking pods: %s", err)
 			}
 		case <-done:
@@ -102,7 +102,7 @@ func CheckPods(cfg Config, isps []v1beta1.ImageSecurityPolicy) error {
 		}
 		for _, p := range ps {
 			glog.Infof("Checking po %s", p.Name)
-			if err := r.Review(admission.PodImages(p), isps, &p); err != nil {
+			if err := r.Review(isp.Namespace, admission.PodImages(p), &p); err != nil {
 				glog.Error(err)
 			}
 		}

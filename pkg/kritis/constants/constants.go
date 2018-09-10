@@ -39,7 +39,7 @@ const (
 	NoAttestationsAnnotation     = "No valid attestations present. This pod will not be able to restart in future"
 
 	// Atomic Container Signature type
-	AtomicContainerSigType = "atomic container signature"
+	AtomicContainerSigType = "SIMPLE_SIGNING_JSON"
 
 	// Public Key Private Key constants for Attestation Secrets.
 	PrivateKey = "private"

@@ -27,18 +27,21 @@ import (
 
 // Violation represents a vulnerability that violates an ISP
 type Violation struct {
-	vulnerability metadata.Vulnerability
-	vType         policy.ViolationType
-	reason        policy.Reason
+	image  string
+	vuln   metadata.Vulnerability
+	vType  policy.ViolationType
+	reason policy.Reason
 }
 
-func NewViolation(vulnz *metadata.Vulnerability, t policy.ViolationType, r policy.Reason) Violation {
+func NewViolation(i string, vulnz *metadata.Vulnerability, t policy.ViolationType, r policy.Reason) Violation {
 	v := Violation{
+		image:  i,
+		vuln:   *vulnz,
 		vType:  t,
 		reason: r,
 	}
 	if vulnz != nil {
-		v.vulnerability = *vulnz
+		v.vuln = *vulnz
 	}
 	return v
 }
@@ -55,7 +58,12 @@ func (v Violation) Type() policy.ViolationType {
 
 // Details returns the detailed violtation
 func (v Violation) Details() interface{} {
-	return v.vulnerability
+	return v.vuln
+}
+
+// Image returns the container image
+func (v Violation) Image() string {
+	return v.image
 }
 
 // UnqualifiedImageReason returns a detailed reason if the image is unqualified
