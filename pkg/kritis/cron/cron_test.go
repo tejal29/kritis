@@ -42,7 +42,7 @@ func TestStartCancels(t *testing.T) {
 
 	// Mock the check function and reset after the test.
 	originalChecker := podChecker
-	podChecker = func(cfg Config, isps []v1beta1.ImageSecurityPolicy) error {
+	podChecker = func(cfg Config, ns []v1.Namespace) error {
 		checked = true
 		return nil
 	}
@@ -57,7 +57,7 @@ func TestStartCancels(t *testing.T) {
 
 	// Make sure the checker is called and Start cancels correctly when the deadline expires.
 	Start(c, Config{
-		SecurityPolicyLister: func(namespace string) ([]v1beta1.ImageSecurityPolicy, error) {
+		NSLister: func() ([]v1.Namespace, error) {
 			return nil, nil
 		},
 	}, checkInterval)

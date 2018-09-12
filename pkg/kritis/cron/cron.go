@@ -23,7 +23,6 @@ import (
 	"github.com/golang/glog"
 	"github.com/grafeas/kritis/pkg/kritis"
 	"github.com/grafeas/kritis/pkg/kritis/admission"
-	"github.com/grafeas/kritis/pkg/kritis/apis/kritis/v1beta1"
 	"github.com/grafeas/kritis/pkg/kritis/metadata"
 	"github.com/grafeas/kritis/pkg/kritis/namespaces"
 	"github.com/grafeas/kritis/pkg/kritis/pods"
@@ -42,20 +41,21 @@ var (
 
 // For testing.
 type podLister func(string) ([]corev1.Pod, error)
+type namespaceLister func() ([]corev1.Namespace, error)
 
 type Config struct {
-	PodLister            podLister
-	Client               metadata.Fetcher
-	ReviewConfig         *review.Config
-	SecurityPolicyLister func(namespace string) ([]v1beta1.ImageSecurityPolicy, error)
+	PodLister    podLister
+	Client       metadata.Fetcher
+	ReviewConfig *review.Config
+	NSLister     namespaceLister
 }
 
 var (
 	defaultViolationStrategy = &violation.AnnotationStrategy{}
 )
 
+// NewCronConfig creates a new Config for Cron Job
 func NewCronConfig(cs *kubernetes.Clientset, client metadata.Fetcher) *Config {
-
 	cfg := Config{
 		PodLister: pods.Pods,
 		Client:    client,
@@ -64,7 +64,7 @@ func NewCronConfig(cs *kubernetes.Clientset, client metadata.Fetcher) *Config {
 			IsWebhook: true,
 			Policies:  []kritis.Policy{isp.Policy{}},
 		},
-		NamespaceLister: namespaces.Namespaces,
+		NSLister: namespaces.Namespaces,
 	}
 	return &cfg
 }
@@ -78,9 +78,9 @@ func Start(ctx context.Context, cfg Config, checkInterval time.Duration) {
 		glog.Info("Checking pods.")
 		select {
 		case <-c.C:
-			ns, err := cfg.NamespaceLister()
+			ns, err := cfg.NSLister()
 			if err != nil {
-				glog.Errorf("fetching image security policies: %s", err)
+				glog.Errorf("fetching namespaces: %s", err)
 				continue
 			}
 			if err := podChecker(cfg, ns); err != nil {
@@ -93,16 +93,16 @@ func Start(ctx context.Context, cfg Config, checkInterval time.Duration) {
 }
 
 // CheckPods checks all running pods against defined policies.
-func CheckPods(cfg Config, isps []v1beta1.ImageSecurityPolicy) error {
+func CheckPods(cfg Config, ns []corev1.Namespace) error {
 	r := review.New(cfg.Client, cfg.ReviewConfig)
-	for _, isp := range isps {
-		ps, err := cfg.PodLister(isp.Namespace)
+	for _, n := range ns {
+		ps, err := cfg.PodLister(n.Name)
 		if err != nil {
 			return err
 		}
 		for _, p := range ps {
 			glog.Infof("Checking po %s", p.Name)
-			if err := r.Review(isp.Namespace, admission.PodImages(p), &p); err != nil {
+			if err := r.Review(n.Name, admission.PodImages(p), &p); err != nil {
 				glog.Error(err)
 			}
 		}
@@ -112,10 +112,10 @@ func CheckPods(cfg Config, isps []v1beta1.ImageSecurityPolicy) error {
 
 // RunInForeground checks Pods in foreground.
 func RunInForeground(cfg Config) error {
-	isps, err := cfg.SecurityPolicyLister("")
+	ns, err := cfg.NSLister()
 	if err != nil {
 		return err
 	}
-	glog.Infof("Got isps %v", isps)
-	return podChecker(cfg, isps)
+	glog.Infof("Got namespaces %v", ns)
+	return podChecker(cfg, ns)
 }
