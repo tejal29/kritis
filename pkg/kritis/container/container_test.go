@@ -16,7 +16,6 @@ limitations under the License.
 package container
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -143,20 +142,11 @@ func TestValidateAttestationSignature(t *testing.T) {
 }
 
 func TestGPGArmorSignVerifyIntegration(t *testing.T) {
-	goodImage = "gcr.io/pso-sec-train-default/mynginx@sha256:958123f8ad595b4ec16757566c1f83aa5e64fe02625e4a7f8cc61254abac28d5"
 	container, err := NewAtomicContainerSig(goodImage, map[string]string{})
-	fmt.Println(container.JSON())
-	secret := &secrets.PGPSigningSecret{
-		PrivateKey: privateKey,
-		PublicKey:  pubKey,
-		SecretName: "demo-testing",
-	}
-	sig, err := container.CreateAttestationSignature(secret)
-	fmt.Println(sig)
 	if err != nil {
 		t.Fatalf("Unexpected error %s", err)
 	}
-	if err := container.VerifyAttestationSignature(testutil.Base64PublicTestKey(t), sig); err != nil {
+	if err := container.VerifyAttestationSignature(testutil.Base64PublicTestKey(t), expectedSig); err != nil {
 		t.Fatalf("unexpected error %s", err)
 	}
 }
